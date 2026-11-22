@@ -121,8 +121,29 @@ function sendSerialCommand(cmd) {
   });
 }
 
+let currentEspIp = "172.16.114.193";
+
+function resolveTargetIp(req) {
+  if (req && req.query && req.query.ip && req.query.ip.trim()) {
+    return req.query.ip.trim();
+  }
+  return currentEspIp;
+}
+
+app.get("/api/esp-ip", (_req, res) => {
+  res.json({ ip: currentEspIp });
+});
+
+app.post("/api/esp-ip", express.json(), (req, res) => {
+  if (req.body && req.body.ip && typeof req.body.ip === "string") {
+    currentEspIp = req.body.ip.trim();
+    return res.json({ ok: true, ip: currentEspIp });
+  }
+  res.status(400).json({ error: "Missing or invalid ip" });
+});
+
 app.get("/api/esp-live", async (req, res) => {
-  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const targetIp = resolveTargetIp(req);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1200);
@@ -149,7 +170,7 @@ app.get("/api/esp-live", async (req, res) => {
 });
 
 app.get("/api/esp-tare", async (req, res) => {
-  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const targetIp = resolveTargetIp(req);
   if (fs.existsSync("/dev/ttyACM0")) {
     try {
       await sendSerialCommand("t");
@@ -173,7 +194,7 @@ app.get("/api/esp-tare", async (req, res) => {
 });
 
 app.get("/api/esp-trigger", async (req, res) => {
-  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const targetIp = resolveTargetIp(req);
   const trigType = (req.query.type || "manual").trim();
 
   if (fs.existsSync("/dev/ttyACM0")) {
@@ -199,7 +220,7 @@ app.get("/api/esp-trigger", async (req, res) => {
 });
 
 app.get("/api/stream", (req, res) => {
-  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const targetIp = resolveTargetIp(req);
   const proxyReq = http.get(`http://${targetIp}:81/stream`, (streamRes) => {
     res.writeHead(streamRes.statusCode, streamRes.headers);
     streamRes.pipe(res);
@@ -247,6 +268,11 @@ app.post(
     const weight = parseFloat(req.get("X-Weight-Grams"));
     const deviceId = req.get("X-Device-ID") || "smart-scale-01";
     const triggerType = req.get("X-Trigger-Type") || "auto";
+
+    const senderIp = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").replace(/^.*:/, "").trim();
+    if (senderIp && senderIp !== "127.0.0.1" && senderIp !== "localhost") {
+      currentEspIp = senderIp;
+    }
 
     if (!Number.isFinite(weight)) {
       return res.status(400).json({ error: "Invalid or missing X-Weight-Grams header" });

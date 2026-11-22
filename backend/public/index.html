@@ -460,10 +460,19 @@
           <div class="cam-overlay" id="camOverlay">STREAM: OFF</div>
         </div>
 
-        <div style="display: flex; gap: 8px;">
-          <button class="secondary" style="width: 100%; justify-content: center; height: 38px;" onclick="applyCameraIp()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-            Reconnect Camera Stream
+        <div class="input-row">
+          <input 
+            type="text" 
+            id="espIpInput" 
+            placeholder="ESP32 IP (e.g. 172.16.114.193)" 
+            onkeydown="if(event.key==='Enter') saveAndApplyIp()"
+          >
+          <button id="setIpBtn" onclick="saveAndApplyIp()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            Connect
+          </button>
+          <button class="secondary" title="Reconnect camera stream" onclick="applyCameraIp()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
           </button>
         </div>
       </section>
@@ -538,10 +547,33 @@
   </div>
 
   <script>
-    const defaultEspIp = '172.16.115.201';
+    const defaultEspIp = '172.16.114.193';
 
     function getCleanIp() {
+      const input = document.getElementById('espIpInput');
+      const val = input ? input.value.trim() : '';
+      if (val) return val;
+      const stored = localStorage.getItem('esp32_ip');
+      if (stored && stored.trim()) return stored.trim();
       return defaultEspIp;
+    }
+
+    function saveAndApplyIp() {
+      const input = document.getElementById('espIpInput');
+      let ip = input ? input.value.trim() : '';
+      if (!ip) ip = defaultEspIp;
+      localStorage.setItem('esp32_ip', ip);
+      if (input) input.value = ip;
+
+      fetch('/api/esp-ip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip })
+      }).catch(() => {});
+
+      streamFallback = 0;
+      applyCameraIp();
+      pollEspDevice();
     }
 
     let streamFallback = 0;
@@ -781,6 +813,15 @@
     function closeModal() {
       document.getElementById('imageModal').classList.remove('active');
     }
+
+    const savedIp = localStorage.getItem('esp32_ip') || defaultEspIp;
+    const ipInput = document.getElementById('espIpInput');
+    if (ipInput) ipInput.value = savedIp;
+    fetch('/api/esp-ip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: savedIp })
+    }).catch(() => {});
 
     applyCameraIp();
     checkHealth();
