@@ -197,25 +197,67 @@ app.get("/api/esp-trigger", async (req, res) => {
   const targetIp = resolveTargetIp(req);
   const trigType = (req.query.type || "manual").trim();
 
-  if (fs.existsSync("/dev/ttyACM0")) {
-    try {
-      await sendSerialCommand("cap");
-      return res.json({ ok: true, triggerType: trigType, method: "serial" });
-    } catch (e) {
-      console.warn("Serial trigger failed:", e.message);
-    }
-  }
-
   try {
+    let weight = 0.0;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1200);
+      const hRes = await fetch(`http://${targetIp}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (hRes.ok) {
+        const hData = await hRes.json();
+        if (Number.isFinite(hData.weight)) weight = Number(hData.weight);
+      }
+    } catch {}
+
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-    const espRes = await fetch(`http://${targetIp}/trigger?type=${encodeURIComponent(trigType)}`, { signal: controller.signal });
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const imgRes = await fetch(`http://${targetIp}/capture`, { signal: controller.signal });
     clearTimeout(timeout);
-    if (!espRes.ok) return res.status(502).json({ error: "ESP32 trigger failed" });
-    const data = await espRes.json();
-    res.json(data);
+
+    if (!imgRes.ok) {
+      return res.status(502).json({ error: `ESP32 capture returned status ${imgRes.status}` });
+    }
+
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    if (buffer.length < 100) {
+      return res.status(502).json({ error: "Invalid JPEG frame received from ESP32" });
+    }
+
+    const id = crypto.randomUUID();
+    const localFile = `${id}.jpg`;
+    fs.writeFileSync(path.join(uploadDir, localFile), buffer);
+
+    const record = {
+      measurementId: id,
+      weightGrams: weight,
+      weightKg: parseFloat((weight / 1000).toFixed(4)),
+      imageUrl: `/uploads/${localFile}`,
+      timestamp: new Date().toISOString(),
+      stabilityStatus: "stable",
+      captureStatus: "saved",
+      deviceId: "smart-scale-01",
+      triggerType: trigType,
+    };
+
+    const cloudUrl = await syncToSupabase(record, buffer);
+    if (cloudUrl) {
+      record.cloudImageUrl = cloudUrl;
+    }
+
+    const all = readLocalDb();
+    all.unshift(record);
+    writeLocalDb(all);
+
+    // Notify ESP32 trigger endpoint for display state update
+    fetch(`http://${targetIp}/trigger?type=${encodeURIComponent(trigType)}`, {
+      signal: AbortSignal.timeout(1000),
+    }).catch(() => {});
+
+    return res.status(201).json({ ok: true, measurement: record });
   } catch (err) {
-    res.status(504).json({ error: "Cannot reach ESP32", details: err.message });
+    console.error("Direct capture failed:", err.message);
+    return res.status(504).json({ error: "Cannot capture from ESP32", details: err.message });
   }
 });
 

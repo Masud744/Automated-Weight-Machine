@@ -652,7 +652,9 @@
           devicePill.querySelector('span').textContent = 'ESP32 Online';
 
           if (health.weight !== undefined) {
-            liveWeight.textContent = Number(health.weight).toFixed(1);
+            const wt = Number(health.weight);
+            liveWeight.textContent = wt.toFixed(1);
+            checkAutoCapture(wt, health.scale);
           }
 
           if (health.scale) {
@@ -710,6 +712,33 @@
       }
     }
 
+    let lastStableWeight = null;
+    let stableStartTime = 0;
+    let autoCapturedForCurrentWeight = false;
+
+    function checkAutoCapture(weight, scaleReady) {
+      if (!scaleReady || Math.abs(weight) < 5.0) {
+        lastStableWeight = null;
+        stableStartTime = 0;
+        autoCapturedForCurrentWeight = false;
+        return;
+      }
+
+      if (lastStableWeight !== null && Math.abs(weight - lastStableWeight) < 1.0) {
+        if (!stableStartTime) stableStartTime = Date.now();
+        if (Date.now() - stableStartTime >= 2000 && !autoCapturedForCurrentWeight) {
+          autoCapturedForCurrentWeight = true;
+          const ip = getCleanIp();
+          fetch('/api/esp-trigger?ip=' + encodeURIComponent(ip) + '&type=auto')
+            .then(r => { if (r.ok) loadMeasurements(); })
+            .catch(() => {});
+        }
+      } else {
+        lastStableWeight = weight;
+        stableStartTime = Date.now();
+      }
+    }
+
     async function triggerManualCapture() {
       const btn = document.getElementById('captureBtn');
       const originalText = btn.textContent;
@@ -718,25 +747,14 @@
 
       const ip = getCleanIp();
       try {
-        let res = null;
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 1500);
-          res = await fetch('http://' + ip + '/trigger?type=manual', { signal: controller.signal });
-          clearTimeout(timeout);
-        } catch {}
-
-        if (!res || !res.ok) {
-          res = await fetch('/api/esp-trigger?ip=' + encodeURIComponent(ip) + '&type=manual');
-        }
+        const res = await fetch('/api/esp-trigger?ip=' + encodeURIComponent(ip) + '&type=manual');
 
         if (res && res.ok) {
           btn.textContent = 'Saved!';
-          setTimeout(loadMeasurements, 1200);
-          setTimeout(loadMeasurements, 2500);
-          setTimeout(loadMeasurements, 4500);
+          await loadMeasurements();
         } else {
-          alert('Could not trigger capture from ESP32.');
+          const err = await res.json().catch(() => ({}));
+          alert('Could not capture photo: ' + (err.error || res.statusText));
         }
       } catch (e) {
         alert('Failed to trigger capture: ' + e.message);
@@ -744,7 +762,7 @@
         setTimeout(() => {
           btn.disabled = false;
           btn.textContent = originalText;
-        }, 1500);
+        }, 1200);
       }
     }
 
